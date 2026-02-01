@@ -1,0 +1,25 @@
+.page {
+  padding: 40px;
+  font-family: Arial, sans-serif;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+input, select, button {
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.output {
+  margin-top: 20px;
+}
+
+.error {
+  color: red;
+  margin-top: 6px;
+}
