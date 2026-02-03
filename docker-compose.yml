@@ -1,17 +1,19 @@
-version: "3.9"
-
 services:
   backend:
     build: ./backend
-    container_name: calculator-backend
     ports:
       - "5000:5000"
-
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()\" || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
   frontend:
     build: ./frontend
-    container_name: calculator-frontend
     ports:
       - "8080:80"
     depends_on:
       - backend
-
+    restart: unless-stopped
