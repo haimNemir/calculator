@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+jobs:
+  compose-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start stack
+        run: docker compose up -d
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:5000/health > /dev/null; then
+              echo "Backend is healthy"
+              exit 0
+            fi
+            echo "Waiting for backend..."
+            sleep 2
+          done
+          echo "Backend did not become healthy"
+          docker compose ps
+          docker compose logs backend
+          exit 1
+
+      - name: Check frontend is up
+        run: |
+          curl -IfsS http://localhost:8080 > /dev/null
+          echo "Frontend is up"
+
+      - name: Shutdown
+        if: always()
+        run: docker compose down -v
+
