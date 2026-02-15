@@ -1,46 +1,119 @@
 name: CI
 
-on:
-  pull_request:
-    branches: [ "main" ]
-  push:
+# This workflow check if the trigger is from a regular push to main branch or from a release tag push. if is a regular push he will push to ECR with the tag of "name+HASH" and if is a release tag push he will push to ECR with the two tags - "name+HASH" and "name+VERSION". And then he will run smoke test on the built images of the backend and the frontend to make sure that they are working correctly.
+
+on: # The trigger for this workflow. 
+  pull_request: # To verify that the new code in the PR doesn't break the code in main. The workflow will run after a PR to main.
     branches: [ "main" ]
 
+  push: # After a PR is marged to main, this is why its called push.
+    branches: [ "main" ]
+    tags: # Here we define that if the push is a tag push (git push origin v1.0.0), then the workflow will run. You need seperate trigger for tags because you have specifice logic in the workflow to handle release tags that will not applied to regular pushes - shuch as conditions like: "(IS_RELEASE=true)".
+      - "v*.*.*" # If the tag will start with "v" and with this format then the workflow will run.
+
 jobs:
-  compose-smoke:
+  build-images: # the job name - build-images.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # Allows to GITHUB_TOKEN to read the repository contents, which is necessary for actions/checkout to work.
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # This action checks out the repository code so that the workflow can access it, and build the images to run the tests.
 
-      - name: Build images
-        run: docker compose build
-
-      - name: Start stack
-        run: docker compose up -d
-
-      - name: Wait for backend health
+      - name: Compute tags (SHA / Version) # This step is for check if the push is a regular push or a release tag push.
+        shell: bash
         run: |
+          set -euo pipefail                                     # This makes the script to fail if any command fails, if there is an undefined variable, or if any command in a pipeline fails. 
+
+          SHORT_SHA="${GITHUB_SHA::7}"                          # GITHUB_SHA - return the full commit HASH, and the syntax of "::7" return only the first 7 chars, which is enough to uniquely identify the commit.
+          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"          # GITHUB_ENV is a special file of GitHub Actions that allows to set environment variables that will be available in the next steps of the workflow. Here we set the SHORT_SHA variable to be used in the next steps.
+ 
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then        # GITHUB_REF - Holds the full reference of the branch or tag that triggered the workflow. for example, if the push is from main branch the the value will be "refs/heads/main", and if the push is from feacher branch the value will be "refs/heads/feature-branch", and if the push is from a tag the value will be "refs/tags/v1.0.0". Here we check if the GITHUB_REF starts with "refs/tags/v", which means that the push is from a release tag.
+            VERSION="${GITHUB_REF_NAME#v}"                      # GITHUB_REF_NAME - Here is holds the short name of the tag such as "v1.0.0", and the syntax of "#v" means to remove the leading "v" from the tag name, so we get only "1.0.0" as the version number.
+            echo "IS_RELEASE=true" >> "$GITHUB_ENV"             # We set the IS_RELEASE variable to true, for the next steps.
+            echo "VERSION=$VERSION" >> "$GITHUB_ENV"            # We set the VERSION as the version number that we extracted from the tag name, for the next steps.
+          else
+            echo "IS_RELEASE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Show computed tags # This step is for debugging purposes, to show the computed variables that we set in the previous steps. So if there is an issue with the workflow we can easily identify it by looking at the logs of this step.
+        shell: bash
+        run: |
+          echo "GITHUB_REF=${GITHUB_REF}"
+          echo "GITHUB_REF_NAME=${GITHUB_REF_NAME}"
+          echo "IS_RELEASE=${IS_RELEASE}"
+          echo "SHORT_SHA=${SHORT_SHA}"
+          if [[ "${IS_RELEASE}" == "true" ]]; then
+            echo "VERSION=${VERSION}"
+          fi
+
+      - name: Build backend image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker build \
+            -t calculator-backend:sha-${SHORT_SHA} \                                        # Result = calculator-backend:sha-abcdefg .
+            ./backend
+
+          if [[ "${IS_RELEASE}" == "true" ]]; then
+            docker tag calculator-backend:sha-${SHORT_SHA} calculator-backend:${VERSION}             # If this is a release tag push, we also tag the image (calculator-backend:sha-abcdefg) with the version number, so we can easily identify it later. Result = calculator-backend:1.0.0 . The format of docker tag is: "docker tag SOURCE_IMAGE[:TAG] TARGET_IMAGE[:TAG]".
+          fi
+
+      - name: Build frontend image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker build \
+            -t calculator-frontend:sha-${SHORT_SHA} \
+            ./frontend
+
+          if [[ "${IS_RELEASE}" == "true" ]]; then
+            docker tag calculator-frontend:sha-${SHORT_SHA} calculator-frontend:${VERSION}
+          fi
+
+      - name: Smoke test backend container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm -d --name backend-ci -p 5000:5000 calculator-backend:sha-${SHORT_SHA}
+
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:5000/health > /dev/null; then
+            if curl -fsS http://localhost:5000/health > /dev/null; then  # curl -fsS: make the curl command silent and fail on HTTP errors.
               echo "Backend is healthy"
-              exit 0
+              docker rm -f backend-ci >/dev/null 2>&1 || true      # -f: force stop and remove the container, right after the test.
+              exit 0                                               # exit from the script with success status. 
             fi
             echo "Waiting for backend..."
             sleep 2
           done
+
           echo "Backend did not become healthy"
-          docker compose ps
-          docker compose logs backend
+          docker logs backend-ci || true               # print the logs of the container to the stdout of GitHub Actions Runner.
+          docker rm -f backend-ci >/dev/null 2>&1 || true
           exit 1
 
-      - name: Check frontend is up
+      - name: Smoke test frontend container
+        shell: bash
         run: |
-          curl -IfsS http://localhost:8080 > /dev/null
-          echo "Frontend is up"
+          set -euo pipefail
 
-      - name: Shutdown
-        if: always()
-        run: docker compose down -v
+          docker run --rm -d --name frontend-ci -p 8080:80 calculator-frontend:sha-${SHORT_SHA}
 
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/ > /dev/null; then
+              echo "Frontend is serving"
+              docker rm -f frontend-ci >/dev/null 2>&1 || true
+              exit 0
+            fi
+            echo "Waiting for frontend..."
+            sleep 2
+          done
+
+          echo "Frontend did not become healthy"
+          docker logs frontend-ci || true
+          docker rm -f frontend-ci >/dev/null 2>&1 || true
+          exit 1
