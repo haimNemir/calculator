@@ -56,7 +56,7 @@ jobs:
           # Result name of the build = calculator-backend:sha-abcdefg .
           docker build \
             -t calculator-backend:sha-${SHORT_SHA} \
-            ./calculator/backend
+            ./backend
 
           if [[ "${IS_RELEASE}" == "true" ]]; then
             docker tag calculator-backend:sha-${SHORT_SHA} calculator-backend:${VERSION}             # If this is a release tag push, we also tag the image (calculator-backend:sha-abcdefg) with the version number, so we can easily identify it later. Result = calculator-backend:1.0.0 . The format of docker tag is: "docker tag SOURCE_IMAGE[:TAG] TARGET_IMAGE[:TAG]".
@@ -69,7 +69,7 @@ jobs:
 
           docker build \
             -t calculator-frontend:sha-${SHORT_SHA} \
-            ./calculator/frontend
+            ./frontend
 
           if [[ "${IS_RELEASE}" == "true" ]]; then
             docker tag calculator-frontend:sha-${SHORT_SHA} calculator-frontend:${VERSION}
