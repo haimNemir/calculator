@@ -53,8 +53,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Result name of the build = calculator-backend:sha-abcdefg .
           docker build \
-            -t calculator-backend:sha-${SHORT_SHA} \                                        # Result = calculator-backend:sha-abcdefg .
+            -t calculator-backend:sha-${SHORT_SHA} \
             ./calculator/backend
 
           if [[ "${IS_RELEASE}" == "true" ]]; then
