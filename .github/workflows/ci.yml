@@ -103,7 +103,7 @@ jobs:
           set -euo pipefail
           # In this build we use the -v flag to mount the nginx.ci.conf file from the files tree to the container, to replace the default nginx.conf file that is in the image. This is because the default nginx.conf file is configured to forward the API requests to the backend server, but in the CI environment we don't have a backend server, so we need to use a different nginx.conf file that only serves the static files without forwarding any requests to the backend server. This allows us to test the frontend application independently of the backend server even when the backend is not exist like in the CI environment.
           docker run --rm -d --name frontend-ci -p 8080:80 \
-          -v "$GITHUB_WORKSPACE/calculator/frontend/nginx.ci.conf:/etc/nginx/conf.d/default.conf:ro" \
+          -v "$GITHUB_WORKSPACE/frontend/nginx.ci.conf:/etc/nginx/conf.d/default.conf:ro" \
           calculator-frontend:sha-${SHORT_SHA}
 
           for i in $(seq 1 30); do
