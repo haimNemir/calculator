@@ -143,7 +143,7 @@ jobs:
           echo "ECR_BACKEND=757630643687.dkr.ecr.us-east-1.amazonaws.com/calculator-dev-backend" >> "$GITHUB_ENV"
           echo "ECR_FRONTEND=757630643687.dkr.ecr.us-east-1.amazonaws.com/calculator-dev-frontend" >> "$GITHUB_ENV"
 
-      
+       
       - name: Login to Amazon ECR
         if: github.event_name == 'push'
         run: |
