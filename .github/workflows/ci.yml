@@ -16,10 +16,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read # Allows to GITHUB_TOKEN to read the repository contents, which is necessary for actions/checkout to work.
+      id-token: write # Here we allow the GITHUB_TOKEN to create an OIDC token, which is necessary for the GitHub Actions to authenticate with AWS and push the images to ECR without needing to store AWS credentials in GitHub Secrets. 
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4 # This action checks out the repository code so that the workflow can access it, and build the images to run the tests.
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::757630643687:role/calculator-github-actions-dev
+          aws-region: us-east-1
+
+      - name: Verify AWS identity   # To check the connection.
+        run: aws sts get-caller-identity
+  
 
       - name: Compute tags (SHA / Version) # This step is for check if the push is a regular push or a release tag push.
         shell: bash
