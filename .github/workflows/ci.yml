@@ -22,17 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4 # This action checks out the repository code so that the workflow can access it, and build the images to run the tests.
 
-      - name: Configure AWS credentials (OIDC) 
-        if: github.event_name == 'push'
-        uses: aws-actions/configure-aws-credentials@v4         # Here we do five steps: 1) Ask form GitHub ODIC token. 2) Send the token to AWS STS service. 3) make "AssumeRoleWithWebIdentity" API call to assume the specified role. 4) Get temporary AWS credentials from the response of the API call. 5) Configure those values as environment variables in the runner of GitHub Action.
-        with:
-          role-to-assume: arn:aws:iam::757630643687:role/calculator-github-actions-dev    # Here we specify the IAM role that we want to assume, by his ARN.
-          aws-region: us-east-1
-
-      - name: Verify AWS identity   # To check the connection.
-        if: github.event_name == 'push'
-        run: aws sts get-caller-identity
-  
+      
 
       - name: Compute tags (SHA / Version) # This step is for check if the push is a regular push or a release tag push.
         shell: bash
@@ -60,6 +50,8 @@ jobs:
           if [[ "${IS_RELEASE}" == "true" ]]; then
             echo "VERSION=${VERSION}"
           fi
+
+      
 
       - name: Build backend image
         shell: bash
@@ -133,3 +125,49 @@ jobs:
           docker logs frontend-ci || true
           docker rm -f frontend-ci >/dev/null 2>&1 || true
           exit 1
+      
+      - name: Configure AWS credentials (OIDC) 
+        if: github.event_name == 'push'                        # We add a condition here and define that the "OIDC doken" proccess will apply only if the PR was successfully compleate and the commit pushed to origin/main, Because if only the PR was opened and we will push images to ECR it will be mistake if after that the image didnt successfully built in smoke-test. There for only after successful push to main the process will start.
+        uses: aws-actions/configure-aws-credentials@v4         # Here we do five steps: 1) Ask form GitHub ODIC token. 2) Send the token to AWS STS service. 3) make "AssumeRoleWithWebIdentity" API call to assume the specified role. 4) Get temporary AWS credentials from the response of the API call. 5) Configure those values as environment variables in the runner of GitHub Action.
+        with:
+          role-to-assume: arn:aws:iam::757630643687:role/calculator-github-actions-dev    # Here we specify the IAM role that we want to assume, by his ARN.
+          aws-region: us-east-1
+
+      - name: Verify AWS identity   # To check the connection.
+        if: github.event_name == 'push'
+        run: aws sts get-caller-identity
+  
+      - name: Set ECR repository URLs (Dev)   # Save in GITHUB_ENV the variables of the backend/frontend URLs.
+        if: github.event_name == 'push'
+        run: |
+          echo "ECR_BACKEND=757630643687.dkr.ecr.us-east-1.amazonaws.com/calculator-dev-backend" >> "$GITHUB_ENV"
+          echo "ECR_FRONTEND=757630643687.dkr.ecr.us-east-1.amazonaws.com/calculator-dev-frontend" >> "$GITHUB_ENV"
+
+      
+      - name: Login to Amazon ECR
+        if: github.event_name == 'push'
+        run: |
+          aws ecr get-login-password --region us-east-1 \
+          | docker login --username AWS --password-stdin 757630643687.dkr.ecr.us-east-1.amazonaws.com
+
+      - name: Push images to ECR (Dev)    # Here we push to ECR the images. We also do this: "docker tag ... to ..." this is for aliac the name of the images from the oldest names to the name of the ECR registry + SHA. we do it because that by default "docker push" will push to Docker hub there for we define in the name itself the destination (domain of the registry) and docker will try to connect to this repo and he will check permissions and only after that he will push to our ECR. 
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Push SHA tags
+          docker tag calculator-backend:sha-${SHORT_SHA}  ${ECR_BACKEND}:sha-${SHORT_SHA}
+          docker tag calculator-frontend:sha-${SHORT_SHA} ${ECR_FRONTEND}:sha-${SHORT_SHA}
+
+          docker push ${ECR_BACKEND}:sha-${SHORT_SHA}
+          docker push ${ECR_FRONTEND}:sha-${SHORT_SHA}
+
+          # Push release tags (version) if this is a release tag push
+          if [[ "${IS_RELEASE}" == "true" ]]; then
+            docker tag calculator-backend:sha-${SHORT_SHA}  ${ECR_BACKEND}:${VERSION}
+            docker tag calculator-frontend:sha-${SHORT_SHA} ${ECR_FRONTEND}:${VERSION}
+
+            docker push ${ECR_BACKEND}:${VERSION}
+            docker push ${ECR_FRONTEND}:${VERSION}
+          fi
