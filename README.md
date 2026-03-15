@@ -6,4 +6,4 @@ Minimal Full Stack training project:
 - DB: MySQL
 
 ## Run locally
-docker compose up --build
+docker compose up --build 
