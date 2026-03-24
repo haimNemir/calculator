@@ -96,13 +96,10 @@ def calc():
     a = data.get("a")
     b = data.get("b")
     op = data.get("op")
-
     if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
         return jsonify({"error": "a and b must be numbers"}), 400
-
     if op not in ["+", "-", "*", "/"]:
         return jsonify({"error": "op must be one of: +, -, *, /"}), 400
-
     if op == "+":
         result = a + b
     elif op == "-":
@@ -117,7 +114,6 @@ def calc():
         save_calc(a, b, op, result)
     except Exception as e:
         pass
-
     return jsonify({"result": result})
 
 @app.get("/api/history")
@@ -127,12 +123,10 @@ def history():
         limit = int(raw)
     except ValueError:
         return jsonify({"error": "limit must be an integer"}), 400
-
     if limit < 1:
         limit = 1
     if limit > 100:
         limit = 100
-
     items = get_history(limit)
     return jsonify({"items": items})
 
