@@ -82,7 +82,7 @@ def get_history(limit: int = 20):
                 "b": float(r[2]),
                 "op": r[3],
                 "result": float(r[4]),
-                "created_at": str(r[5]),
+                "created_at": str(r[5]), 
             }
             for r in rows
         ]
