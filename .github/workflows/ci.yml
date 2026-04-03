@@ -171,3 +171,139 @@ jobs:
             docker push ${ECR_BACKEND}:${VERSION}
             docker push ${ECR_FRONTEND}:${VERSION}
           fi
+
+  propose-desire-state-update:
+    name: Propose desire state image update
+    runs-on: ubuntu-latest
+    needs: build-images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: prod-promotion
+    permissions:
+      contents: read
+
+    steps:
+      - name: Compute target tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "NEW_IMAGE_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "UPDATE_BRANCH=automation/promote-sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            calculator_desire_state
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout desire state repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/calculator_desire_state
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          path: calculator_desire_state
+
+      - name: Update image tag file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd calculator_desire_state
+
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("environments/values-dev-images.yaml")
+          new_tag = os.environ["NEW_IMAGE_TAG"]
+          lines = path.read_text().splitlines()
+          updated = {"backend": False, "frontend": False}
+          current_service = None
+          inside_image_block = False
+
+          for index, line in enumerate(lines):
+              if line in ("backend:", "frontend:"):
+                  current_service = line[:-1]
+                  inside_image_block = False
+                  continue
+
+              if current_service and line == "  image:":
+                  inside_image_block = True
+                  continue
+
+              if current_service and inside_image_block and line.startswith("    tag: "):
+                  lines[index] = f"    tag: {new_tag}"
+                  updated[current_service] = True
+                  current_service = None
+                  inside_image_block = False
+
+          missing = [service for service, was_updated in updated.items() if not was_updated]
+          if missing:
+              raise SystemExit(f"Could not update tag for: {', '.join(missing)}")
+
+          path.write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Detect repository changes
+        id: detect-changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd calculator_desire_state
+
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push update branch
+        if: steps.detect-changes.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd calculator_desire_state
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "${UPDATE_BRANCH}"
+          git add environments/values-dev-images.yaml
+          git commit -m "Promote calculator images to ${NEW_IMAGE_TAG}"
+          git push --force-with-lease origin "${UPDATE_BRANCH}"
+
+      - name: Create or reuse promotion PR
+        if: steps.detect-changes.outputs.has_changes == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          repo="${GITHUB_REPOSITORY_OWNER}/calculator_desire_state"
+          existing_pr="$(gh pr list --repo "${repo}" --head "${UPDATE_BRANCH}" --base main --state open --json number --jq '.[0].number')"
+
+          if [[ -n "${existing_pr}" ]]; then
+            echo "Promotion PR already exists: #${existing_pr}"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "${repo}" \
+            --base main \
+            --head "${UPDATE_BRANCH}" \
+            --title "Promote calculator images to ${NEW_IMAGE_TAG}" \
+            --body "## Summary
+
+          - update backend image tag to \`${NEW_IMAGE_TAG}\`
+          - update frontend image tag to \`${NEW_IMAGE_TAG}\`
+          - source commit: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
