@@ -6,7 +6,7 @@ on: # The trigger for this workflow.
   pull_request: # To verify that the new code in the PR doesn't break the code in main. The workflow will run after a PR to main.
     branches: [ "main" ]
 
-  push: # After a PR is marged to main, this is why its called push.
+  push: # After a PR is merged to main, this is why its called push.
     branches: [ "main" ]
     tags: # Here we define that if the push is a tag push (git push origin v1.0.0), then the workflow will run. You need seperate trigger for tags because you have specifice logic in the workflow to handle release tags that will not applied to regular pushes - shuch as conditions like: "(IS_RELEASE=true)".
       - "v*.*.*" # If the tag will start with "v" and with this format then the workflow will run.
@@ -172,43 +172,44 @@ jobs:
             docker push ${ECR_FRONTEND}:${VERSION}
           fi
 
-  propose-desire-state-update:
+  propose-desire-state-update:                # New job.
     name: Propose desire state image update
-    runs-on: ubuntu-latest
-    needs: build-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    environment: prod-promotion
+    runs-on: ubuntu-latest 
+    needs: build-images  # This means that this job will run only after the successful completion of the "build-images" job.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' # This job will run only if the event that triggered the workflow is a push to the main branch, because we want to propose the desire state update only after a successful push to main, and not for pull requests or tag pushes. This is because the desire state update is relevant only after the code is merged to main and the images are pushed to ECR.
+    environment: prod-promotion  # This environment we created in GitHub UI for this repository. And here we force the CI job to use this environment. In this invironment we defined that only after a manual approval of "HaimNemir" the job will start to run, and we do it because its the safest way to deployment to production, and here we try to make dev like prod. Also in this environment we get APP_PRIVATE_KEY secret and APP_ID variable that we need for the next steps of the workflow for the authentication with GitHub App.
     permissions:
-      contents: read
+      contents: read # Gives read access to current repository contents, and in the step of "Generate GitHub App token" we will get a token with permissions to access the "calculator_desire_state" repository,
 
     steps:
       - name: Compute target tag
         shell: bash
         run: |
-          set -euo pipefail
-          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          set -euo pipefail       # This makes the script to fail if any command fails, if there is an undefined variable, or if any command in a pipeline fails. 
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"           # ${variable:start:length} - This is a substring syntax in bash that allows to extract a portion of a string. Here we extract the first 7 chars of the GITHUB_SHA variable, which is hold the last commit HASH that triggered the workflow. And we save it in the "GITHUB_ENV" global variable file for CI environment when the "step" is executed.
           echo "NEW_IMAGE_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           echo "UPDATE_BRANCH=automation/promote-sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v2
+        id: app-token # Here we give a variable name for this step for the scope of this workflow, and so we can get the output of this step in the next steps, and for our case we need to get the "token" output that this step will generate. And in the next steps we can get this token by using the syntax: "${{steps.app-token.outputs.token}}".
+        uses: actions/create-github-app-token@v2 # This is an official action of GitHub. Its job is to authenticate as a GitHub App that we created in GitHub UI, and ask from GitHub a short lived installation token to access the "calculator_desire_state" repository with read and write permissions. 
         with:
-          app-id: ${{ vars.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: |
-            calculator_desire_state
+          app-id: ${{ vars.APP_ID }} # Here we tell the action which GitHub App we want to use. 
+          private-key: ${{ secrets.APP_PRIVATE_KEY }} # This APP_PRIVATE_KEY is defined in the "environment" that we defined for this job. Its allows us to use the GitHub App.
+          owner: ${{ github.repository_owner }} # Its important to understand that the GitHub App is created in some account (user or organization) and its only the blueprint of the app, and later you can install this app in different accounts, and each installation can generate tokens only for the account that the app is installed in. So its important to specify the owner of the app installation. And about the target repository that we specify below, we can narrow down the permmisions of the token to the specific repository. In default the owner is the current repository owner, but its good practice to specify it explicitly.
+          repositories: |    # The only repository that this token will have access to. 
+            calculator_desire_state    
           permission-contents: write
           permission-pull-requests: write
+      # Output of this step: token. You can access it: ${{steps.app-token.outputs.token}}".
 
       - name: Checkout desire state repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # This action can clone repository to the runner of GitHub Actions, so we can make changes to the desire state files and push them to the repository. 
         with:
-          repository: ${{ github.repository_owner }}/calculator_desire_state
-          ref: main
-          token: ${{ steps.app-token.outputs.token }}
-          path: calculator_desire_state
+          repository: ${{ github.repository_owner }}/calculator_desire_state # Here we specify which repository we want to clone and the owner of this repository (The same owner of the current repository).
+          ref: main     # Specify the branch that we want to clone, and "main" here is the most updated branch so we choose it.
+          token: ${{ steps.app-token.outputs.token }} # Here we use the token that we got from the "Generate GitHub App token" step.
+          path: calculator_desire_state # Here we specify a new directory in the runner that the action will clone the repo to it.
 
       - name: Update image tag file
         shell: bash
@@ -221,16 +222,16 @@ jobs:
           import os
           from pathlib import Path
 
-          path = Path("environments/values-dev-images.yaml")
-          new_tag = os.environ["NEW_IMAGE_TAG"]
-          lines = path.read_text().splitlines()
-          updated = {"backend": False, "frontend": False}
+          path = Path("environments/values-dev-images.yaml")                      # Here we save an environment value that holds the path to the YAML file. "Path" is a class in python that allows us to work with file paths.
+          new_tag = os.environ["NEW_IMAGE_TAG"]                                   # "os" is a module in python that allows you to work with the operating system, here it will be the runner of the CI. And here we use it to get the value of the "NEW_IMAGE_TAG" environment variable that we set in the previous steps.
+          lines = path.read_text().splitlines()                                   # read_text() - return a string of the content of the file. splitlines() - split the string into a list of lines.
+          updated = {"backend": False, "frontend": False}                         # updated - checklist to make sure that we updated both images tags.
           current_service = None
-          inside_image_block = False
+          inside_image_block = False                                              # inside_image_block - flag to indicate if we are inside the "image" block of the YAML file.
 
-          for index, line in enumerate(lines):
-              if line in ("backend:", "frontend:"):
-                  current_service = line[:-1]
+          for index, line in enumerate(lines):                                    # enumerate() - Get a list of strings/vars and for each string return the index and the string itself, the index will be set inside "index", and the string will be set inside "line".
+              if line in ("backend:", "frontend:"):                               # The file structure in "desire_state" contains also lines with only one word such as: "backend:" and "frontend:", so when we check if "backend:" exist in the tuple of ("backend:", "frontend:") its make sense. 
+                  current_service = line[:-1]                                     # Save the service name such as "backend" or "frontend". line[start:end:step] - here we define only the start(defalut 0) and the end (-1 : one letter from the end), and in result we get from "backend:" only "backend".
                   inside_image_block = False
                   continue
 
@@ -244,22 +245,27 @@ jobs:
                   current_service = None
                   inside_image_block = False
 
-          missing = [service for service, was_updated in updated.items() if not was_updated]
+          missing = []
+
+          for service, was_updated in updated.items():
+            if not was_updated:
+              missing.append(service)
+
           if missing:
               raise SystemExit(f"Could not update tag for: {', '.join(missing)}")
 
-          path.write_text("\n".join(lines) + "\n")
+          path.write_text("\n".join(lines) + "\n")            # path.write_text(...) - Here we write the updated cotent from inside the brackets back to the file.  "\n".join(lines) -  the "join" function takes a list of strings and connects them to an one string. And what that comes befor the "." is define what will be the seperate value between each string.   + "\n" - We add a new empty line at the end of the file for some tools that require it and its prevent problems. 
           PY
 
       - name: Detect repository changes
-        id: detect-changes
+        id: detect-changes # give a ID name to this step so we can refer his outputs later.
         shell: bash
         run: |
           set -euo pipefail
 
           cd calculator_desire_state
 
-          if git diff --quiet; then
+          if git diff --quiet; then     # if there is no changes in the repo from the last commit, it will return true.
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
@@ -273,28 +279,32 @@ jobs:
 
           cd calculator_desire_state
 
-          git config user.name "github-actions[bot]"
+          # Those next two lines is to define the git user and email, because when we try to commit the changes that we made to the "values-dev-images.yaml" file, git will check if there is a user name and email defined in the git config, and if there is not it will fail. 
+          git config user.name "github-actions[bot]"    # This config change the user/email only for the scope of this branch in this fork repo.
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git checkout -B "${UPDATE_BRANCH}"
+          # Best practice in Git is first create a new branch for your changes, but here its not a problem because the new branch will be empty and the "git checkout" will not block the process and the changes will be commited to the new branch.
+          git checkout -B "${UPDATE_BRANCH}"        # UPDATE_BRANCH - we set it above. git checkout -B "${UPDATE_BRANCH}" - Its equal to: git switch -C "${UPDATE_BRANCH}", and the meaning of it is to create a new branch with the name that we defined in the UPDATE_BRANCH variable, and if there is already branch with this name it will switch to it and make him to stop point to his current commit, and start point to the equal commit as the main branch, and in this way we make sure that the update branch always start from the most updated main branch.
           git add environments/values-dev-images.yaml
-          git commit -m "Promote calculator images to ${NEW_IMAGE_TAG}"
-          git push --force-with-lease origin "${UPDATE_BRANCH}"
+          git commit -m "CI commit: Promote calculator images to ${NEW_IMAGE_TAG}"
+          git push --force-with-lease origin "${UPDATE_BRANCH}"       # Here we use "--force-with-lease" only for cases we change the CI and we use the same branch name in multiple update tags, but basiclly its redundant. To understand --force-with-lease you need to understand: There is a three copies branches for each branch: 1- the remote branch, 2- the local branch with the new changes, 3- The last copy of the remote branch that exists localy (but its possible to be outdated). --force-with-lease : This flag is make a force push even it override the state in the remote branch, with the local branch but only if the last local copy of the remote branch is the same as the current remote branch.
 
-      - name: Create or reuse promotion PR
+      - name: Create or reuse promotion PR in desire state repository 
+        # pay attention: In this step we use the "gh" CLI tool for GitHub, and this tool allows us to interact with GitHub from the command line, such as creating PRs, listing PRs, etc. And this tool is different from the "git" CLI tool that allows us to make "commits" and "push" to the remote repository.
+
         if: steps.detect-changes.outputs.has_changes == 'true'
         shell: bash
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        env:  # In this secion you can define environment variables that will be available only in this step.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}  # Here we set for the "gh" CLI tool the authentication token. This variable is a "Hard coded" variable and "gh" is automatically recognize it and use it for authentication in all the commands that we will run with "gh" in this step.
         run: |
           set -euo pipefail
 
-          repo="${GITHUB_REPOSITORY_OWNER}/calculator_desire_state"
-          existing_pr="$(gh pr list --repo "${repo}" --head "${UPDATE_BRANCH}" --base main --state open --json number --jq '.[0].number')"
+          repo="${GITHUB_REPOSITORY_OWNER}/calculator_desire_state"           # GITHUB_REPOSITORY_OWNER - is the owner of the current repository.
+          existing_pr="$(gh pr list --repo "${repo}" --head "${UPDATE_BRANCH}" --base main --state open --json number --jq '.[0].number')"      # Its return the numeric number of the current PR that open already, or an empty list if there is no open PR.      "gh pr list" - Return a list of PRs, --repo - specify the repository, --head - specify the source branch of the PR (who is pushing the changes), --base - the target branch of the PR (who is receiving the changes), --state - the state of the PR (open, closed, all), --json - specify that we want to get the output in JSON format, and we want only the "number" field from the all fields of the PR, and this field is the number of the PR, and the result will look like this: [{"number": 17}] only if there is an existing PR, or this "[]" if there is not. "jq" is a command-line JSON processor and we use it to extract the desired value from existing JSON, so here we use "jq" to get only the number value from the JSON output list by using : '.[0].number' - the ".[0]" means to get the first element of the list (we only have one), and  ".number" means to get the the value "number" from the first element of the list. So in result we have the number of the PR or an empty list.
 
-          if [[ -n "${existing_pr}" ]]; then
+          if [[ -n "${existing_pr}" ]]; then         # "-n" - check if the string is not empty.
             echo "Promotion PR already exists: #${existing_pr}"
-            exit 0
+            exit 0    # Here we exit with success status from this step because there is no need to create a new PR if there is already an open PR for the same update branch.
           fi
 
           gh pr create \
@@ -302,6 +312,7 @@ jobs:
             --base main \
             --head "${UPDATE_BRANCH}" \
             --title "Promote calculator images to ${NEW_IMAGE_TAG}" \
+            # --body below is an additional description for the PR.
             --body "## Summary
 
           - update backend image tag to \`${NEW_IMAGE_TAG}\`
